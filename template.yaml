@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless Real-time Polling Application
+
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        POLLS_TABLE: !Ref PollsTable
+        VOTES_TABLE: !Ref VotesTable
+    Architectures:
+      - x86_64
+
+Resources:
+  # DynamoDB Tables
+  PollsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Polls
+      AttributeDefinitions:
+        - AttributeName: pollId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pollId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  VotesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Votes
+      AttributeDefinitions:
+        - AttributeName: pollId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pollId
+          KeyType: HASH
+        - AttributeName: userId
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  # Lambda Functions
+  CreatePollFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: createPoll.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PollsTable
+      Events:
+        CreatePoll:
+          Type: Api
+          Properties:
+            Path: /polls
+            Method: post
+            RestApiId: !Ref PollApi
+
+  ListPollsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: listPolls.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PollsTable
+      Events:
+        ListPolls:
+          Type: Api
+          Properties:
+            Path: /polls
+            Method: get
+            RestApiId: !Ref PollApi
+
+  GetPollFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: getPoll.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PollsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref VotesTable
+      Events:
+        GetPoll:
+          Type: Api
+          Properties:
+            Path: /polls/{pollId}
+            Method: get
+            RestApiId: !Ref PollApi
+
+  VoteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: vote.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref PollsTable
+      Events:
+        Vote:
+          Type: Api
+          Properties:
+            Path: /polls/{pollId}/vote
+            Method: post
+            RestApiId: !Ref PollApi
+
+  # API Gateway
+  PollApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  # S3 Bucket for Frontend
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-frontend-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${PollApi}.execute-api.${AWS::Region}.amazonaws.com/prod/'
+  
+  WebsiteURL:
+    Description: URL for the website hosted on S3
+    Value: !GetAtt FrontendBucket.WebsiteURL
+  
+  FrontendBucket:
+    Description: S3 Bucket for frontend
+    Value: !Ref FrontendBucket
+
+
